@@ -34,6 +34,8 @@
 #include <SPI.h>
 #include <Adafruit_SleepyDog.h>
 #include <CayenneLPP.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
 // debug via serial
 #define SERIALDEBUG
@@ -42,11 +44,8 @@
 #define SLEEP       true
 
 // Schedule TX  (might become longer due to duty cycle limitations).
-uint8_t CYCLE_TIMES = 5;  // minutes for 1 cycle to end (including sleep)
-uint16_t SLEEP_TIME = 60*(CYCLE_TIMES-1) + 50; // seconds sleep time 
-
-// do not change
-const unsigned TX_INTERVAL = 1;                // seconds of transmit cycle
+uint8_t CYCLE_TIMES = 1;  // minutes for 1 cycle to end (including sleep)
+uint16_t SLEEP_TIME = 60*(CYCLE_TIMES-1) + 53; // seconds sleep time
 
 // A dummy sensor publishing static values of temperatures, weight and battery voltage.
 // Please turn this on when working without any sensor hardware.
@@ -56,10 +55,11 @@ const unsigned TX_INTERVAL = 1;                // seconds of transmit cycle
 #if !SENSOR_DUMMY
 
 // enable weight scale sensors
+#define SENSOR_HX711       true
 
 // enable 1-Wire Dallas Temperature sensors
-#define SENSOR_DS18B20_OUT false
-#define SENSOR_DS18B20_IN  false
+#define SENSOR_DS18B20_OUT true
+#define SENSOR_DS18B20_IN  true
 
 // Battery voltage measured at an analog pin
 #define SENSOR_BATTERY_VOLTAGE    true
@@ -75,18 +75,18 @@ const unsigned TX_INTERVAL = 1;                // seconds of transmit cycle
 // first. When copying an EUI from ttnctl output, this means to reverse
 // the bytes. For TTN issued EUIs the last bytes should be 0xD5, 0xB3,
 // 0x70.
-static const u1_t PROGMEM APPEUI[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+static const u1_t PROGMEM APPEUI[8] = { 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xBE };
 void os_getArtEui (u1_t* buf) { memcpy_P(buf, APPEUI, 8);}
 
 // This should also be in little endian format, see above.
-static const u1_t PROGMEM DEVEUI[8] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+static const u1_t PROGMEM DEVEUI[8] = { 0xEE, 0xBE, 0x81, 0x8E, 0x11, 0xB6, 0x76, 0x98 };
 void os_getDevEui (u1_t* buf) { memcpy_P(buf, DEVEUI, 8);}
 
 // This key should be in big endian format (or, since it is not really a
 // number but a block of memory, endianness does not really apply). In
 // practice, a key taken from ttnctl can be copied as-is.
 // The key shown here is the semtech default key.
-static const u1_t PROGMEM APPKEY[16] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+static const u1_t PROGMEM APPKEY[16] = { 0xC1, 0xCB, 0x09, 0x22, 0xEA, 0x0A, 0xA1, 0xD4, 0x52, 0x5A, 0xA9, 0xF3, 0x9F, 0x71, 0xA8, 0x29 };
 void os_getDevKey (u1_t* buf) { memcpy_P(buf, APPKEY, 16);}
 
 static osjob_t sendjob;
@@ -106,8 +106,8 @@ static osjob_t sendjob;
 // -------------------
 // HX711: Scale sensor
 // -------------------
-const int HX711_PIN_DOUT = 12;
-const int HX711_PIN_PDSCK = 13;
+const int HX711_PIN_DOUT = 9;
+const int HX711_PIN_PDSCK = 12;
 
 // ---------------
 // General - scale
@@ -144,6 +144,7 @@ float LOADCELL_TEMP_COMP = 0.00035;
 // Number of temperature devices on 1-Wire busses
 const int ds18b20_outside_device_count = 1;
 const int ds18b20_inside_device_count  = 1;
+float temperatureC;
 
 // Order of the physical array of temperature devices,
 // the order is normally defined by the device id hardcoded in
@@ -158,7 +159,7 @@ const int ds18b20_inside_device_order[ds18b20_inside_device_count] = {0};
 //const int ds18b20_inside_device_order[ds18b20_inside_device_count] = {0,1};
 
 // Resolution for all devices (9, 10, 11 or 12 bits)
-const int ds18b20_precision = 12;
+const int ds18b20_precision = 10;
 
 // 1-Wire pin for the temperature sensors
 // Note: Pin 5 corresponds to the physical pin D1 of ESP8266 MCUs
@@ -186,13 +187,7 @@ HX711 scale;
 float weight;
 #endif
 
-//#if SENSOR_DS18B20_OUT
-
-// 1-Wire library
-#include <OneWire.h>
-
-// DS18B20/DallasTemperature library
-#include <DallasTemperature.h>
+#if SENSOR_DS18B20_OUT
 
 // For communicating with any 1-Wire device (not just DS18B20)
 OneWire oneWire_out(ds18b20_outside_onewire_pin);
@@ -206,15 +201,9 @@ uint8_t ds18b20_out_addresses[1][8];
 // Intermediate data structure for reading the sensor values
 float ds18b20_temperature_out[1];
 
-//#endif
+#endif
 
-//#if SENSOR_DS18B20_IN
-
-// 1-Wire library
-#include <OneWire.h>
-
-// DS18B20/DallasTemperature library
-#include <DallasTemperature.h>
+#if SENSOR_DS18B20_IN
 
 // For communicating with any 1-Wire device (not just DS18B20)
 OneWire oneWire_in(ds18b20_inside_onewire_pin);
@@ -228,7 +217,7 @@ uint8_t ds18b20_in_addresses[ds18b20_inside_device_count][8];
 // Intermediate data structure for reading the sensor values
 float ds18b20_temperature_in[ds18b20_inside_device_count];
 
-//#endif
+#endif
 
 #if SENSOR_BATTERY_VOLTAGE
 float lipo_voltage;
@@ -350,9 +339,6 @@ void onEvent (ev_t ev) {
         SLEEP_TIME = 60 * (LMIC.frame[LMIC.dataBeg] - 1) + 50;
       }
 
-      // Schedule next transmission
-      os_setTimedCallback(&sendjob, os_getTime()+sec2osticks(TX_INTERVAL), do_send);
-      
       #if SLEEP
       SERIALDEBUG_PRINT(F("Going to sleep for "));
       SERIALDEBUG_PRINT(SLEEP_TIME);
@@ -371,6 +357,9 @@ void onEvent (ev_t ev) {
       SERIALDEBUG_PRINTLN(F(""));
       SERIALDEBUG_PRINTLN(F("... woke up again"));
       #endif
+
+      // next transmission
+      do_send(&sendjob);
 
       break;
     case EV_LOST_TSYNC:
@@ -417,7 +406,7 @@ void do_send(osjob_t* j) {
   #if SENSOR_DUMMY
   lpp.addLoad(5, 54.4);
   // lpp.addLoad(6, 55.7);
-  lpp.addTemperature(0, 12.4);
+  lpp.addTemperature(5, 12.4);
   lpp.addTemperature(10, 34.9);
   lpp.addTemperature(11, 35.2);
   lpp.addVoltage(0, 3.86);
@@ -426,33 +415,30 @@ void do_send(osjob_t* j) {
   #if SENSOR_HX711
   lpp.addLoad(5, weight);
   #if SENSOR_DS18B20_OUT
-  if (ds18b20_temperature_out[0] > -30 && ds18b20_temperature_out[0] < 50) {
+  if (ds18b20_temperature_out[0] != DEVICE_DISCONNECTED_C && ds18b20_temperature_out[0] != 85.0) {
     weight_comp = weight * ( 1. - LOADCELL_TEMP_COMP * (20. - ds18b20_temperature_out[0]));
     lpp.addLoad(6, weight_comp);
   }
   #endif
   #endif
 
-  //SERIALDEBUG_PRINTLN(LOADCELL_TEMP_COMP,5);
-
   #if SENSOR_DS18B20_OUT
-  // Iterate all inside DS18B20 devices and read temperature values
+  // Iterate all outside DS18B20 devices and add temperature values to payload
   for (int i = 0; i < ds18b20_outside_device_count; i++) {
-    if (ds18b20_temperature_out[i] == -127.0) {
-      SERIALDEBUG_PRINT(F("Inside sensor seems not to be connected. Device : "));
-      SERIALDEBUG_PRINTLN(i);
+    if (ds18b20_temperature_out[i] == DEVICE_DISCONNECTED_C || ds18b20_temperature_out[i] == 85.0) {
+      SERIALDEBUG_PRINT(F("Outside temperature sensor seems not to be connected or had bad reading. Not added to payload. Device : "));
     } else {
-      // for inside sensors start with CayenneLPP channel 0
-      lpp.addTemperature(i, ds18b20_temperature_out[i]);
+      // for outside sensors start with CayenneLPP channel 5
+      lpp.addTemperature(5 + i, ds18b20_temperature_out[i]);
     }
   }
   #endif
 
   #if SENSOR_DS18B20_IN
-  // Iterate all inside DS18B20 devices and read temperature values
+  // Iterate all inside DS18B20 devices and add temperature values to payload
   for (int i = 0; i < ds18b20_inside_device_count; i++) {
-    if (ds18b20_temperature_in[i] == -127.0) {
-      SERIALDEBUG_PRINT(F("Inside sensor seems not to be connected. Device : "));
+    if (ds18b20_temperature_in[i] == DEVICE_DISCONNECTED_C || ds18b20_temperature_in[i] == 85.0) {
+      SERIALDEBUG_PRINT(F("Inside temperature sensor seems not to be connected or had bad reading. Not added to payload. Device : "));
       SERIALDEBUG_PRINTLN(i);
     } else {
       // for inside sensors start with CayenneLPP channel 10
@@ -469,11 +455,9 @@ void do_send(osjob_t* j) {
 
   SERIALDEBUG_PRINT(F("CayenneLPP Payload Size : "));
   SERIALDEBUG_PRINTLN(lpp.getSize());
-  SERIALDEBUG_PRINT(F("CayenneLPP Payload : "));
+  SERIALDEBUG_PRINT(F("CayenneLPP Payload Hex  : "));
   for (size_t i=0; i<lpp.getSize(); ++i) {
-//    if (i != 0)
-      //SERIALDEBUG_PRINT("-");
-      printHex2(lpp.getBuffer()[i]);
+    printHex2(lpp.getBuffer()[i]);
   }
   SERIALDEBUG_PRINTLN();
 
@@ -567,14 +551,18 @@ void read_temperature_outside() {
   // Initiate temperature retrieval
   ds18b20_sensor_out.requestTemperatures();
 
-  // Wait at least 750 ms for conversion
-  delay(1000);
+  // Wait at least 200 ms for conversion
+  delay(200);
 
   // Iterate all DS18B20 devices and read temperature values
   for (int i = 0; i < ds18b20_outside_device_count; i++) {
 
     // Read single device
-    float temperatureC = ds18b20_sensor_out.getTempC(ds18b20_out_addresses[i]);
+    temperatureC = ds18b20_sensor_out.getTempC(ds18b20_out_addresses[i]);
+    if (temperatureC == DEVICE_DISCONNECTED_C) {
+      SERIALDEBUG_PRINTLN(F("Error: Could not properly read outside temperature data. Device disconnected?"));
+    }
+
     ds18b20_temperature_out[i] = temperatureC;
 
     SERIALDEBUG_PRINT(F("temp outside (DS18B20)"));
@@ -598,14 +586,18 @@ void read_temperature_inside() {
   // Initiate temperature retrieval
   ds18b20_sensor_in.requestTemperatures();
 
-  // Wait at least 750 ms for conversion
-  delay(1000);
+  // Wait at least 200 ms for conversion
+  delay(200);
 
   // Iterate all DS18B20 devices and read temperature values
   for (int i = 0; i < ds18b20_inside_device_count; i++) {
 
     // Read single device
-    float temperatureC = ds18b20_sensor_in.getTempC(ds18b20_in_addresses[i]);
+    temperatureC = ds18b20_sensor_in.getTempC(ds18b20_in_addresses[i]);
+    if (temperatureC == DEVICE_DISCONNECTED_C) {
+      SERIALDEBUG_PRINTLN(F("Error: Could not properly read inside temperature data. Device disconnected?"));
+    }
+
     ds18b20_temperature_in[i] = temperatureC;
 
     SERIALDEBUG_PRINT(F("temp inside  (DS18B20)"));
@@ -665,23 +657,16 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);    // turn the LED off by making the voltage LOW
 
-  delay(3000);
+  //delay(1000);
   
-  // never ever remove. Device becomes available to serial programming
+  // never ever remove. Device becomes unavailable to serial programming
   Serial.begin(9600);
   
-  delay(2000);
+  delay(1000);
 
   SERIALDEBUG_PRINTLN(F("Starting"));
   
   setup_sensors();
-
-// For Pinoccio Scout boards
-  #ifdef VCC_ENABLE
-  pinMode(VCC_ENABLE, OUTPUT);
-  digitalWrite(VCC_ENABLE, HIGH);
-  delay(1000);
-  #endif
 
   // LMIC init
   os_init();
